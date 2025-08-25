@@ -41,3 +41,7 @@ build/
 *.savepoint
 *.out
 *.log
+
+# Flink client runtime klasörleri
+flink-client-sink-tcplocalhost1883/
+flink-client-source-tcplocalhost1883/
