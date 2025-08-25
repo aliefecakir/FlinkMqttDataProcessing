@@ -43,7 +43,7 @@ public class FlinkDataStream {
 
                             @Override
                             public void processElement(String jsonString, Context ctx, Collector<String> out) throws IOException {
-                                ObjectMapper objMapper = new ObjectMapper();
+                                ObjebasctMapper objMapper = new ObjectMapper();
                                 JsonNode jsonNode = objMapper.readTree(jsonString);
 
                                 double value = jsonNode.get("value").asDouble();
@@ -55,7 +55,8 @@ public class FlinkDataStream {
                                     lastValueState.update(newValue);
                                     out.collect(String.format("{\"sensorId\": \"%s\", \"valueFahrenheit\": %.1f}",
                                             jsonNode.get("sensorId").asText(), newValue));
-                                }
+                                }else
+                                    System.out.println("This input already processed!");
                             }
                         });
 
