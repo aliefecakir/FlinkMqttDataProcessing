@@ -13,6 +13,9 @@ import org.apache.flink.streaming.api.windowing.assigners.TumblingProcessingTime
 import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.util.Collector;
+import org.apache.flink.api.java.utils.ParameterTool;
+
+import java.io.IOException;
 //import org.slf4j.Logger;
 //import org.slf4j.LoggerFactory;
 
@@ -20,38 +23,30 @@ public class FlinkDataStream {
 
     //private static final Logger logger = LoggerFactory.getLogger(TestClass.class);
     private static final ObjectMapper objMapper = new ObjectMapper();
+    static ParameterTool params;
+
+    static {
+        try {
+            params = ParameterTool.fromPropertiesFile("src/main/resources/config.properties");
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
 
     public static void main(String[] args) throws Exception {
 
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 
-        String broker = "tcp://localhost:1883";
-        String sourceTopic = "sensor/input/temp";
-        String sinkTopic = "sensor/output/temp";
-        String sourceClientId = "flink-client-source";
-        String sinkClientId = "flink-client-sink";
+        String broker = params.get("mqtt.broker", "tcp://localhost:1883");
+        String sourceTopic = params.get("mqtt.source.topic", "sensor/input/temp");
+        String sinkTopic = params.get("mqtt.sink.topic", "sensor/output/temp");
+        String sourceClientId = params.get("mqtt.source.clientId", "flink-client-source");
+        String sinkClientId = params.get("mqtt.sink.clientId", "flink-client-sink");
 
         DataStream<String> mqttStream = env.addSource(new MqttSource(broker, sourceTopic, sourceClientId));
 
         DataStream<String> processedStream = mqttStream
-                .keyBy(jsonString -> {
-                    try {
-                        JsonNode jsonNode = objMapper.readTree(jsonString);
-
-                        if (!jsonNode.has("sensorId") ||
-                                jsonNode.get("sensorId").isNull() ||
-                                jsonNode.get("sensorId").asText().trim().isEmpty()) {
-                            return "UNKNOWN";
-                        }
-
-                        return jsonNode.get("sensorId").asText();
-
-                    } catch (Exception e) {
-                        System.out.println("JSON parse error during KeyBy: " + jsonString);
-                        return "INVALID_SENSOR";
-                    }
-                })
-
+                .keyBy(FlinkDataStream::extractSensorId)
                 .window(TumblingProcessingTimeWindows.of(Time.seconds(60)))
                 .process(new ProcessWindowFunction<String, String, String, TimeWindow>() {
 
@@ -120,5 +115,21 @@ public class FlinkDataStream {
 
         System.out.println("Flink job is running. Listening on '" + sourceTopic + "' and publishing to '" + sinkTopic + "'...");
         env.execute();
+    }
+    public static String extractSensorId(String jsonString) {
+        try {
+            JsonNode jsonNode = objMapper.readTree(jsonString);
+
+            if (!jsonNode.has("sensorId") ||
+                    jsonNode.get("sensorId").isNull() ||
+                    jsonNode.get("sensorId").asText().trim().isEmpty()) {
+                return "UNKNOWN";
+            }
+
+            return jsonNode.get("sensorId").asText();
+
+        } catch (Exception e) {
+            return "INVALID_SENSOR";
+        }
     }
 }
