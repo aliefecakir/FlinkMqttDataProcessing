@@ -13,8 +13,13 @@ import org.apache.flink.streaming.api.windowing.assigners.TumblingProcessingTime
 import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.util.Collector;
+//import org.slf4j.Logger;
+//import org.slf4j.LoggerFactory;
 
 public class FlinkDataStream {
+
+    //private static final Logger logger = LoggerFactory.getLogger(TestClass.class);
+    private static final ObjectMapper objMapper = new ObjectMapper();
 
     public static void main(String[] args) throws Exception {
 
@@ -30,10 +35,23 @@ public class FlinkDataStream {
 
         DataStream<String> processedStream = mqttStream
                 .keyBy(jsonString -> {
-                    ObjectMapper objMapper = new ObjectMapper();
-                    JsonNode jsonNode = objMapper.readTree(jsonString);
-                    return jsonNode.get("sensorId").asText();
+                    try {
+                        JsonNode jsonNode = objMapper.readTree(jsonString);
+
+                        if (!jsonNode.has("sensorId") ||
+                                jsonNode.get("sensorId").isNull() ||
+                                jsonNode.get("sensorId").asText().trim().isEmpty()) {
+                            return "UNKNOWN";
+                        }
+
+                        return jsonNode.get("sensorId").asText();
+
+                    } catch (Exception e) {
+                        System.out.println("JSON parse error during KeyBy: " + jsonString);
+                        return "INVALID_SENSOR";
+                    }
                 })
+
                 .window(TumblingProcessingTimeWindows.of(Time.seconds(60)))
                 .process(new ProcessWindowFunction<String, String, String, TimeWindow>() {
 
@@ -59,31 +77,41 @@ public class FlinkDataStream {
                         Double lastValue = lastValueState.value();
 
                         for (String jsonString : elements) {
-                            JsonNode jsonNode = objMapper.readTree(jsonString);
-                            double value = jsonNode.get("value").asDouble();
-                            value = (value * 1.8) + 32;
 
-                            if (lastValue == null || value != lastValue) {
-                                sum += value;
-                                count++;
-                                lastValue = value;
-                                lastValueState.update(value);
+                            try {
+                                JsonNode jsonNode = objMapper.readTree(jsonString);
+                                if(jsonNode.has("value")){
+                                    double value = jsonNode.get("value").asDouble();
+                                    double fahValue = (value * 1.8) + 32;
+                                    if (lastValue == null || value != lastValue) {
+                                        sum += fahValue;
+                                        count++;
+                                        lastValue = value;
+                                        lastValueState.update(value);
 
-                                System.out.println(String.format(
-                                        "{\"sensorId\": \"%s\", \"valueFahrenheit\": %.1f} (processed)",
-                                        key, value));
-                            } else {
-                                System.out.println(String.format(
-                                        "{\"sensorId\": \"%s\", \"valueFahrenheit\": %.1f} (skipped duplicate)",
-                                        key, value));
+                                        System.out.println(String.format(
+                                                "{\"sensorId\": \"%s\", \"valueFahrenheit\": %.1f} (processed)",
+                                                key, fahValue));
+
+                                    } else {
+                                        System.out.println(String.format(
+                                                "{\"sensorId\": \"%s\", \"value\": %.1f} (skipped duplicate)",
+                                                key, value));
+                                    }
+                                }else {
+                                    System.out.println("JSON parse error during process! Data: " + jsonString);
+                                }
+                            }catch(Exception e){
+                                System.out.println("JSON parse error during process! Data: " + jsonString);
                             }
+
                         }
 
                         if (count > 0) {
                             double avg = sum / count;
-                            out.collect(String.format(
-                                    "{\"sensorId\": \"%s\", \"avgFahrenheit\": %.1f}",
-                                    key, avg));
+                            String outputJson = String.format("{\"sensorId\":\"%s\", \"avgFahrenheit\": %.1f}", key, avg);
+                            System.out.println("Ortalama gönderildi: " + outputJson);
+                            out.collect(outputJson);
                         }
                     }
                 });
