@@ -1,4 +1,5 @@
 package MqttFlinkProject.Flink;
+
 import MqttFlinkProject.Connector.MqttSource;
 import MqttFlinkProject.Connector.MqttSink;
 import org.apache.flink.api.common.state.ValueState;
@@ -18,7 +19,40 @@ import java.io.IOException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+/**
+ * A Flink streaming job for processing sensor data from MQTT.
+ *
+ * <p>This job reads raw sensor messages from an MQTT source, extracts
+ * sensor IDs, processes values in 60-second tumbling windows, converts
+ * them to Fahrenheit, and publishes aggregated results back to an MQTT sink.</p>
+ *
+ * <p>Configuration parameters (e.g., broker address, topics, client IDs)
+ * are read from <code>config.properties</code>.</p>
+ */
 public class FlinkDataStream {
+
+    /**
+     * Extracts the sensor ID from the given JSON string.
+     *
+     * @param jsonString the JSON input string
+     * @return the extracted sensor ID, "UNKNOWN" if missing/empty,
+     *         or "INVALID_SENSOR" if parsing fails
+     */
+    public static String extractSensorId(String jsonString) {
+        try {
+            JsonNode jsonNode = objMapper.readTree(jsonString);
+
+            if (!jsonNode.has("sensorId") ||
+                    jsonNode.get("sensorId").isNull() ||
+                    jsonNode.get("sensorId").asText().trim().isEmpty()) {
+                return "UNKNOWN";
+            }
+            return jsonNode.get("sensorId").asText();
+
+        } catch (Exception e) {
+            return "INVALID_SENSOR";
+        }
+    }
 
     private static final Logger logger = LoggerFactory.getLogger(FlinkDataStream.class);
     private static final ObjectMapper objMapper = new ObjectMapper();
@@ -32,6 +66,22 @@ public class FlinkDataStream {
         }
     }
 
+    /**
+     * Main entry point of the Flink job.
+     *
+     * <p>The pipeline consists of:
+     * <ul>
+     *   <li>MQTT source: reads sensor messages</li>
+     *   <li>KeyBy sensorId: groups messages by sensor</li>
+     *   <li>Tumbling window (60s): aggregates readings in time windows</li>
+     *   <li>Process function: filters duplicates, converts Celsius to Fahrenheit,
+     *       calculates averages</li>
+     *   <li>MQTT sink: publishes processed results back to another topic</li>
+     * </ul>
+     *
+     * @param args command line arguments (not used, configs come from properties file)
+     * @throws Exception if job execution fails
+     */
     public static void main(String[] args) throws Exception {
 
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
@@ -58,6 +108,24 @@ public class FlinkDataStream {
                         lastValueState = getRuntimeContext().getState(descriptor);
                     }
 
+                    /**
+                     * Processes all elements in the given window for a specific sensor.
+                     *
+                     * <p>Steps:
+                     * <ol>
+                     *   <li>Parse each JSON message</li>
+                     *   <li>Convert Celsius to Fahrenheit</li>
+                     *   <li>Filter out duplicate values using state</li>
+                     *   <li>Compute average Fahrenheit value per window</li>
+                     *   <li>Emit result as JSON string</li>
+                     * </ol>
+                     *
+                     * @param key      the sensor ID
+                     * @param context  the window context
+                     * @param elements all input messages for the window
+                     * @param out      the collector for output results
+                     * @throws Exception if JSON parsing or state update fails
+                     */
                     @Override
                     public void process(String key,
                                         Context context,
@@ -89,40 +157,25 @@ public class FlinkDataStream {
                                                 "{\"sensorId\": \"{}\", \"value\": {}} (skipped duplicate)",
                                                 key, value);
                                     }
-                                }else {
-                                    logger.error("JSON parse error during process! Data: ", jsonString);
+                                } else {
+                                    logger.error("JSON parse error during process! Data: {}", jsonString);
                                 }
-                            }catch(Exception e){
-                                logger.error("JSON parse error during process! Data: ", jsonString, e);
+                            } catch(Exception e){
+                                logger.error("JSON parse error during process! Data: {}", jsonString, e);
                             }
                         }
 
                         if (count > 0) {
                             double avg = sum / count;
                             String outputJson = String.format("{\"sensorId\":\"%s\", \"avgFahrenheit\": %.1f}", key, avg);
-                            logger.info("Ortalama gönderildi: {}", outputJson);
+                            logger.info("Average sent: {}", outputJson);
                             out.collect(outputJson);
                         }
                     }
                 });
 
         processedStream.addSink(new MqttSink(broker, sinkTopic, sinkClientId)).setParallelism(1);
-        logger.info("Flink job is running. Listening on '{}' and publishing to '{}'",sourceTopic, sinkTopic);
+        logger.info("Flink job is running. Listening on '{}' and publishing to '{}'", sourceTopic, sinkTopic);
         env.execute();
-    }
-    public static String extractSensorId(String jsonString) {
-        try {
-            JsonNode jsonNode = objMapper.readTree(jsonString);
-
-            if (!jsonNode.has("sensorId") ||
-                    jsonNode.get("sensorId").isNull() ||
-                    jsonNode.get("sensorId").asText().trim().isEmpty()) {
-                return "UNKNOWN";
-            }
-            return jsonNode.get("sensorId").asText();
-
-        } catch (Exception e) {
-            return "INVALID_SENSOR";
-        }
     }
 }
