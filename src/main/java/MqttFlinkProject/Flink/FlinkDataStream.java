@@ -14,14 +14,13 @@ import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.util.Collector;
 import org.apache.flink.api.java.utils.ParameterTool;
-
 import java.io.IOException;
-//import org.slf4j.Logger;
-//import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class FlinkDataStream {
 
-    //private static final Logger logger = LoggerFactory.getLogger(TestClass.class);
+    private static final Logger logger = LoggerFactory.getLogger(FlinkDataStream.class);
     private static final ObjectMapper objMapper = new ObjectMapper();
     static ParameterTool params;
 
@@ -83,37 +82,32 @@ public class FlinkDataStream {
                                         count++;
                                         lastValue = value;
                                         lastValueState.update(value);
-
-                                        System.out.println(String.format(
-                                                "{\"sensorId\": \"%s\", \"valueFahrenheit\": %.1f} (processed)",
-                                                key, fahValue));
+                                        logger.info(String.format("{\"sensorId\": \"%s\", \"valueFahrenheit\": %.1f} (processed)", key, fahValue));
 
                                     } else {
-                                        System.out.println(String.format(
-                                                "{\"sensorId\": \"%s\", \"value\": %.1f} (skipped duplicate)",
-                                                key, value));
+                                        logger.info(
+                                                "{\"sensorId\": \"{}\", \"value\": {}} (skipped duplicate)",
+                                                key, value);
                                     }
                                 }else {
-                                    System.out.println("JSON parse error during process! Data: " + jsonString);
+                                    logger.error("JSON parse error during process! Data: ", jsonString);
                                 }
                             }catch(Exception e){
-                                System.out.println("JSON parse error during process! Data: " + jsonString);
+                                logger.error("JSON parse error during process! Data: ", jsonString, e);
                             }
-
                         }
 
                         if (count > 0) {
                             double avg = sum / count;
                             String outputJson = String.format("{\"sensorId\":\"%s\", \"avgFahrenheit\": %.1f}", key, avg);
-                            System.out.println("Ortalama gönderildi: " + outputJson);
+                            logger.info("Ortalama gönderildi: {}", outputJson);
                             out.collect(outputJson);
                         }
                     }
                 });
 
         processedStream.addSink(new MqttSink(broker, sinkTopic, sinkClientId)).setParallelism(1);
-
-        System.out.println("Flink job is running. Listening on '" + sourceTopic + "' and publishing to '" + sinkTopic + "'...");
+        logger.info("Flink job is running. Listening on '{}' and publishing to '{}'",sourceTopic, sinkTopic);
         env.execute();
     }
     public static String extractSensorId(String jsonString) {
@@ -125,7 +119,6 @@ public class FlinkDataStream {
                     jsonNode.get("sensorId").asText().trim().isEmpty()) {
                 return "UNKNOWN";
             }
-
             return jsonNode.get("sensorId").asText();
 
         } catch (Exception e) {

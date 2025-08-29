@@ -4,10 +4,13 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.functions.source.RichSourceFunction;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
 import org.eclipse.paho.client.mqttv3.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.nio.charset.StandardCharsets;
 
 public class MqttSource extends RichSourceFunction<String> {
-
+    private static final Logger logger = LoggerFactory.getLogger(MqttSource.class);
     private final String broker;
     private final String topic;
     private final String clientId;
@@ -39,7 +42,7 @@ public class MqttSource extends RichSourceFunction<String> {
         client.setCallback(new MqttCallback() {
             @Override
             public void connectionLost(Throwable cause) {
-                System.err.println("MQTT connection lost: " + cause.getMessage());
+                logger.error("MQTT connection lost: {}",cause.getMessage());
                 synchronized (lock) {
                     lock.notifyAll();
                 }
@@ -48,7 +51,7 @@ public class MqttSource extends RichSourceFunction<String> {
             @Override
             public void messageArrived(String topic, MqttMessage message) {
                 String payloadString = new String(message.getPayload(), StandardCharsets.UTF_8);
-                System.out.println("Message received in Flink Source: " + payloadString);
+                logger.info("Message received in Flink Source: {}", payloadString);
                 ctx.collect(payloadString);
             }
 
@@ -59,16 +62,16 @@ public class MqttSource extends RichSourceFunction<String> {
         while (isRunning) {
             try {
                 if (!client.isConnected()) {
-                    System.out.println("Connecting to MQTT broker...");
+                    logger.info("Connecting to MQTT broker...");
                     client.connect(conOpts);
-                    System.out.println("Connected. Subscribing to topic: " + topic);
+                    logger.info("Connected. Subscribing to topic: {}",topic);
                     client.subscribe(topic);
                 }
                 synchronized (lock) {
                     lock.wait();
                 }
             } catch (MqttException e) {
-                System.err.println("Failed to connect or subscribe: " + e.getMessage());
+                logger.error("Failed to connect or subscribe: {}", e.getMessage());
                 Thread.sleep(2500);
             }
         }
