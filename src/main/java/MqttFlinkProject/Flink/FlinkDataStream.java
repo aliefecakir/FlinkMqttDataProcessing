@@ -15,9 +15,18 @@ import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.util.Collector;
 import org.apache.flink.api.java.utils.ParameterTool;
+import java.net.*;
+import java.io.FileWriter;
 import java.io.IOException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import java.io.File;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.Scanner;
 
 /**
  * A Flink streaming job for processing sensor data from MQTT.
@@ -96,7 +105,7 @@ public class FlinkDataStream {
 
         DataStream<String> processedStream = mqttStream
                 .keyBy(FlinkDataStream::extractSensorId)
-                .window(TumblingProcessingTimeWindows.of(Time.seconds(60)))
+                .window(TumblingProcessingTimeWindows.of(Time.seconds(1)))
                 .process(new ProcessWindowFunction<String, String, String, TimeWindow>() {
 
                     private transient ValueState<Double> lastValueState;
@@ -146,12 +155,48 @@ public class FlinkDataStream {
                                     double value = jsonNode.get("value").asDouble();
                                     double fahValue = (value * 1.8) + 32;
                                     if (lastValue == null || value != lastValue) {
-                                        sum += fahValue;
-                                        count++;
-                                        lastValue = value;
-                                        lastValueState.update(value);
-                                        logger.info(String.format("{\"sensorId\": \"%s\", \"valueFahrenheit\": %.1f} (processed)", key, fahValue));
+                                            sum += fahValue;
+                                            count++;
+                                            lastValue = value;
+                                            lastValueState.update(value);
+                                            logger.info(String.format("{\"sensorId\": \"%s\", \"valueFahrenheit\": %.2f} (processed)", key, fahValue));
 
+                                            if(value >= 45) {
+                                                logger.error("The temperature of the sensor with ID '{}' is above 45 °C. ({} °F)", key, fahValue);
+                                                try {
+                                                    File txtWarn = new File("C:\\Users\\Ally\\IdeaProjects\\MqttFlinkPipeline\\src\\main\\java\\MqttFlinkProject\\Flink\\TempWarns.txt");
+                                                    FileWriter fileWriter = new FileWriter(txtWarn.getAbsolutePath(), true);
+                                                    LocalDateTime now = LocalDateTime.now();
+                                                    DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+                                                    String formattedDateTime = now.format(formatter);
+                                                    HttpClient httpClient = HttpClient.newHttpClient();
+                                                    String warn = "The temperature of the sensor with ID '" + key + "' is above 45 °C. ("
+                                                            + fahValue + " °F) - " + formattedDateTime + "\n";
+                                                    String url = "https://ntfy.sh/sensor_temp_warn";
+
+                                                    HttpRequest request = HttpRequest.newBuilder()
+                                                            .uri(URI.create(url))
+                                                            .header("Title","High Temperature Warning!")
+                                                            .header("Priority", "urgent")
+                                                            .header("Tags","warning,skull")
+                                                            .POST(HttpRequest.BodyPublishers.ofString(warn))
+                                                            .build();
+
+                                                    httpClient.send(request, HttpResponse.BodyHandlers.discarding());
+
+                                                    if(txtWarn.createNewFile()){
+                                                        logger.info(txtWarn.getName() + " created successfully.");}
+                                                    else{
+                                                        logger.info(txtWarn.getName() + " already created!");}
+
+                                                    fileWriter.write(warn);
+                                                    fileWriter.close();
+                                                    logger.info("The warning written to " + txtWarn.getName());
+
+                                                }catch (IOException e){
+                                                    logger.error("An error occured!",e);
+                                                }
+                                            }
                                     } else {
                                         logger.info(
                                                 "{\"sensorId\": \"{}\", \"value\": {}} (skipped duplicate)",
@@ -167,7 +212,7 @@ public class FlinkDataStream {
 
                         if (count > 0) {
                             double avg = sum / count;
-                            String outputJson = String.format("{\"sensorId\":\"%s\", \"avgFahrenheit\": %.1f}", key, avg);
+                            String outputJson = String.format("{\"sensorId\":\"%s\", \"avgFahrenheit\": %.2f}", key, avg);
                             logger.info("Average sent: {}", outputJson);
                             out.collect(outputJson);
                         }
