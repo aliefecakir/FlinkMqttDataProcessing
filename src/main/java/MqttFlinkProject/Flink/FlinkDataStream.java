@@ -26,7 +26,6 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.Scanner;
 
 /**
  * A Flink streaming job for processing sensor data from MQTT.
@@ -61,6 +60,52 @@ public class FlinkDataStream {
         } catch (Exception e) {
             return "INVALID_SENSOR";
         }
+    }
+    public static void tempMessage(String url, String message, HttpClient httpClient) throws IOException, InterruptedException {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Title","High Temperature Warning!")
+                .header("Priority", "urgent")
+                .header("Tags","fire")
+                .POST(HttpRequest.BodyPublishers.ofString(message))
+                .build();
+
+        httpClient.send(request, HttpResponse.BodyHandlers.discarding());
+    }
+    public static void prsMessage(String url, String message, HttpClient httpClient) throws IOException, InterruptedException {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Title","High Pressure Warning!")
+                .header("Priority", "urgent")
+                .header("Tags","warning")
+                .POST(HttpRequest.BodyPublishers.ofString(message))
+                .build();
+
+        httpClient.send(request, HttpResponse.BodyHandlers.discarding());
+    }
+    public static void humMessage(String url, String message, HttpClient httpClient) throws IOException, InterruptedException {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Title","High Humidity Warning!")
+                .header("Priority", "urgent")
+                .header("Tags","droplet")
+                .POST(HttpRequest.BodyPublishers.ofString(message))
+                .build();
+
+        httpClient.send(request, HttpResponse.BodyHandlers.discarding());
+    }
+
+    public static void writeToTxt(String message, File file) throws IOException {
+        FileWriter fileWriter = new FileWriter(file.getAbsolutePath(), true);
+
+        if(file.createNewFile()){
+            logger.info(file.getName() + " created successfully.");}
+        else{
+            logger.info(file.getName() + " already created!");}
+
+        fileWriter.write(message);
+        fileWriter.close();
+        logger.info("The warning written to " + file.getName());
     }
 
     private static final Logger logger = LoggerFactory.getLogger(FlinkDataStream.class);
@@ -107,11 +152,12 @@ public class FlinkDataStream {
                 .keyBy(FlinkDataStream::extractSensorId)
                 .window(TumblingProcessingTimeWindows.of(Time.seconds(1)))
                 .process(new ProcessWindowFunction<String, String, String, TimeWindow>() {
-
+                    private transient HttpClient httpClient;
                     private transient ValueState<Double> lastValueState;
 
                     @Override
                     public void open(Configuration parameters) {
+                        httpClient = HttpClient.newHttpClient();
                         ValueStateDescriptor<Double> descriptor =
                                 new ValueStateDescriptor<>("lastValue", Double.class);
                         lastValueState = getRuntimeContext().getState(descriptor);
@@ -129,98 +175,104 @@ public class FlinkDataStream {
                      *   <li>Emit result as JSON string</li>
                      * </ol>
                      *
-                     * @param key      the sensor ID
+                     * @param Id      the sensor ID
                      * @param context  the window context
                      * @param elements all input messages for the window
                      * @param out      the collector for output results
                      * @throws Exception if JSON parsing or state update fails
                      */
                     @Override
-                    public void process(String key,
+                    public void process(String Id,
                                         Context context,
                                         Iterable<String> elements,
                                         Collector<String> out) throws Exception {
                         ObjectMapper objMapper = new ObjectMapper();
 
-                        double sum = 0;
-                        int count = 0;
+                        double temperature, prs, sum = 0, fahTemp = 0, atm = 0;
+                        int hum = 0, count = 0;
 
                         Double lastValue = lastValueState.value();
 
                         for (String jsonString : elements) {
-
                             try {
                                 JsonNode jsonNode = objMapper.readTree(jsonString);
-                                if(jsonNode.has("value")){
-                                    double value = jsonNode.get("value").asDouble();
-                                    double fahValue = (value * 1.8) + 32;
-                                    if (lastValue == null || value != lastValue) {
-                                            sum += fahValue;
-                                            count++;
-                                            lastValue = value;
-                                            lastValueState.update(value);
-                                            logger.info(String.format("{\"sensorId\": \"%s\", \"valueFahrenheit\": %.2f} (processed)", key, fahValue));
+                                if (jsonNode.has("value") && jsonNode.has("pressure") && jsonNode.has("humidity")) {
+                                    temperature = jsonNode.get("value").asDouble();
+                                    fahTemp = (temperature * 1.8) + 32;
+                                    prs = jsonNode.get("pressure").asDouble();
+                                    atm = (prs / 101325);
+                                    hum = jsonNode.get("humidity").asInt();
 
-                                            if(value >= 45) {
-                                                logger.error("The temperature of the sensor with ID '{}' is above 45 °C. ({} °F)", key, fahValue);
-                                                try {
-                                                    File txtWarn = new File("C:\\Users\\Ally\\IdeaProjects\\MqttFlinkPipeline\\src\\main\\java\\MqttFlinkProject\\Flink\\TempWarns.txt");
-                                                    FileWriter fileWriter = new FileWriter(txtWarn.getAbsolutePath(), true);
-                                                    LocalDateTime now = LocalDateTime.now();
-                                                    DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-                                                    String formattedDateTime = now.format(formatter);
-                                                    HttpClient httpClient = HttpClient.newHttpClient();
-                                                    String warn = "The temperature of the sensor with ID '" + key + "' is above 45 °C. ("
-                                                            + fahValue + " °F) - " + formattedDateTime + "\n";
-                                                    String url = "https://ntfy.sh/sensor_temp_warn";
+                                    if (lastValue == null || temperature != lastValue) {
+                                        sum += fahTemp;
+                                        count++;
+                                        lastValue = temperature;
+                                        lastValueState.update(temperature);
 
-                                                    HttpRequest request = HttpRequest.newBuilder()
-                                                            .uri(URI.create(url))
-                                                            .header("Title","High Temperature Warning!")
-                                                            .header("Priority", "urgent")
-                                                            .header("Tags","warning,skull")
-                                                            .POST(HttpRequest.BodyPublishers.ofString(warn))
-                                                            .build();
+                                        logger.info(String.format(
+                                                "{\"Sensor Id\": \"%s\", \"Temperature(°F)\": %.1f, \"Humidity\": %%%d, \"Pressure(atm)\": %.2f} (processed)",
+                                                Id, fahTemp, hum, atm));
 
-                                                    httpClient.send(request, HttpResponse.BodyHandlers.discarding());
+                                        File txtWarn = new File("C:\\Users\\Ally\\IdeaProjects\\MqttFlinkPipeline\\src\\main\\java\\MqttFlinkProject\\Flink\\TempWarns.txt");
+                                        LocalDateTime now = LocalDateTime.now();
+                                        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+                                        String formattedDateTime = now.format(formatter);
 
-                                                    if(txtWarn.createNewFile()){
-                                                        logger.info(txtWarn.getName() + " created successfully.");}
-                                                    else{
-                                                        logger.info(txtWarn.getName() + " already created!");}
+                                        String tempWarn = "The temperature of the sensor with ID '" + Id + "' is above 45 °C! (" +
+                                                String.format("%.1f", fahTemp) + " °F) - " + formattedDateTime + "\n";
+                                        String prsWarn = "The pressure of the sensor with ID '" + Id + "' is above 1.15 atm! (" +
+                                                String.format("%.2f", atm) + " atm) - " + formattedDateTime + "\n";
+                                        String humWarn = "The humidity of the sensor with ID '" + Id + "' is above %70! (%" +
+                                                hum + ") - " + formattedDateTime + "\n";
 
-                                                    fileWriter.write(warn);
-                                                    fileWriter.close();
-                                                    logger.info("The warning written to " + txtWarn.getName());
+                                        String ntfyUrl = "https://ntfy.sh/sensor_temp_warn";
 
-                                                }catch (IOException e){
-                                                    logger.error("An error occured!",e);
-                                                }
+                                        try {
+                                            if (temperature > 45) {
+                                                logger.error("The temperature of the sensor with ID '{}' is above 45 °C! ({} °F)", Id, String.format("%.1f", fahTemp));
+                                                tempMessage(ntfyUrl, tempWarn, httpClient);
+                                                writeToTxt(tempWarn, txtWarn);
+                                            } else if (atm > 1.15) {
+                                                logger.error("The pressure of the sensor with ID '{}' is above 1.15 atm! ({} atm)", Id, String.format("%.2f", atm));
+                                                prsMessage(ntfyUrl, prsWarn, httpClient);
+                                                writeToTxt(prsWarn, txtWarn);
+                                            } else if (hum > 70) {
+                                                logger.error("The humidity of the sensor with ID '{}' is above %70 (%{})", Id, hum);
+                                                humMessage(ntfyUrl, humWarn, httpClient);
+                                                writeToTxt(humWarn, txtWarn);
                                             }
+                                        } catch (Exception e) {
+                                            logger.error("An error has occured!", e);
+                                        }
+
                                     } else {
-                                        logger.info(
-                                                "{\"sensorId\": \"{}\", \"value\": {}} (skipped duplicate)",
-                                                key, value);
+                                        logger.info(String.format(
+                                                "{\"Sensor Id\": \"%s\", \"Temperature(°F)\": %.1f, \"Humidity\": %%%d, \"Pressure(atm)\": %.2f} (skipped duplicate)",
+                                                Id, fahTemp, hum, atm));
                                     }
+
                                 } else {
                                     logger.error("JSON parse error during process! Data: {}", jsonString);
                                 }
-                            } catch(Exception e){
+                            } catch (Exception e) {
                                 logger.error("JSON parse error during process! Data: {}", jsonString, e);
                             }
                         }
 
                         if (count > 0) {
                             double avg = sum / count;
-                            String outputJson = String.format("{\"sensorId\":\"%s\", \"avgFahrenheit\": %.2f}", key, avg);
+                            String outputJson = String.format(
+                                    "{\"Sensor Id\": \"%s\", \"Average Temperature(°F)\": %.1f}",
+                                    Id, avg);
                             logger.info("Average sent: {}", outputJson);
                             out.collect(outputJson);
                         }
                     }
+
                 });
 
-        processedStream.addSink(new MqttSink(broker, sinkTopic, sinkClientId)).setParallelism(1);
-        logger.info("Flink job is running. Listening on '{}' and publishing to '{}'", sourceTopic, sinkTopic);
-        env.execute();
+                processedStream.addSink(new MqttSink(broker, sinkTopic, sinkClientId)).setParallelism(1);
+                logger.info("Flink job is running. Listening on '{}' and publishing to '{}'", sourceTopic, sinkTopic);
+                env.execute();
+        }
     }
-}
