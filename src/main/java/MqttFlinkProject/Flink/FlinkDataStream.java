@@ -24,6 +24,10 @@ import java.io.File;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 
@@ -154,13 +158,26 @@ public class FlinkDataStream {
                 .process(new ProcessWindowFunction<String, String, String, TimeWindow>() {
                     private transient HttpClient httpClient;
                     private transient ValueState<Double> lastValueState;
+                    private transient Connection conn;
 
                     @Override
-                    public void open(Configuration parameters) {
+                    public void open(Configuration parameters) throws SQLException {
                         httpClient = HttpClient.newHttpClient();
                         ValueStateDescriptor<Double> descriptor =
                                 new ValueStateDescriptor<>("lastValue", Double.class);
                         lastValueState = getRuntimeContext().getState(descriptor);
+
+                        String url = "jdbc:postgresql://localhost:5432/sensor_output_db";
+                        String user = "postgres";
+                        String password = "299464960";
+
+                        try {
+                            conn = DriverManager.getConnection(url, user, password);
+                            logger.info("PostgreSQL connection established successfully!");
+                        } catch (SQLException e) {
+                            logger.error("Failed to connect to PostgreSQL!", e);
+                            throw e;
+                        }
                     }
 
                     /**
@@ -196,11 +213,12 @@ public class FlinkDataStream {
                         for (String jsonString : elements) {
                             try {
                                 JsonNode jsonNode = objMapper.readTree(jsonString);
-                                if (jsonNode.has("value") && jsonNode.has("pressure") && jsonNode.has("humidity")) {
-                                    temperature = jsonNode.get("value").asDouble();
+                                if (jsonNode.has("temperature") && jsonNode.has("pressure") && jsonNode.has("humidity")) {
+                                    temperature = jsonNode.get("temperature").asDouble();
                                     fahTemp = (temperature * 1.8) + 32;
                                     prs = jsonNode.get("pressure").asDouble();
                                     atm = (prs / 101325);
+                                    atm = Math.round(atm * 100.0) / 100.0;
                                     hum = jsonNode.get("humidity").asInt();
 
                                     if (lastValue == null || temperature != lastValue) {
@@ -224,22 +242,44 @@ public class FlinkDataStream {
                                                 String.format("%.2f", atm) + " atm) - " + formattedDateTime + "\n";
                                         String humWarn = "The humidity of the sensor with ID '" + Id + "' is above %70! (%" +
                                                 hum + ") - " + formattedDateTime + "\n";
+                                        String insertSql = "INSERT INTO sensor_alerts(sensor_id, alert_type, value) VALUES (?, ?, ?)";
 
                                         String ntfyUrl = "https://ntfy.sh/sensor_temp_warn";
 
-                                        try {
+                                        try (PreparedStatement stmt = conn.prepareStatement(insertSql)){
                                             if (temperature > 45) {
                                                 logger.error("The temperature of the sensor with ID '{}' is above 45 °C! ({} °F)", Id, String.format("%.1f", fahTemp));
                                                 tempMessage(ntfyUrl, tempWarn, httpClient);
                                                 writeToTxt(tempWarn, txtWarn);
-                                            } else if (atm > 1.15) {
+                                                stmt.setString(1, Id);
+                                                stmt.setString(2, "temperature");
+                                                stmt.setDouble(3, temperature);
+                                                int rows = stmt.executeUpdate();
+                                                if (rows > 0) {
+                                                    logger.info("Temperature alert for sensor '{}' successfully written to DB.", Id);
+                                                }
+                                            } if (atm > 1.15) {
                                                 logger.error("The pressure of the sensor with ID '{}' is above 1.15 atm! ({} atm)", Id, String.format("%.2f", atm));
                                                 prsMessage(ntfyUrl, prsWarn, httpClient);
                                                 writeToTxt(prsWarn, txtWarn);
-                                            } else if (hum > 70) {
+                                                stmt.setString(1, Id);
+                                                stmt.setString(2, "pressure"); // veya pressure / humidity
+                                                stmt.setDouble(3, atm);      // senin oluşturduğun mesaj
+                                                int rows = stmt.executeUpdate();
+                                                if (rows > 0) {
+                                                    logger.info("Pressure alert for sensor '{}' successfully written to DB.", Id);
+                                                }
+                                            } if (hum > 70) {
                                                 logger.error("The humidity of the sensor with ID '{}' is above %70 (%{})", Id, hum);
                                                 humMessage(ntfyUrl, humWarn, httpClient);
                                                 writeToTxt(humWarn, txtWarn);
+                                                stmt.setString(1, Id);
+                                                stmt.setString(2, "humidity"); // veya pressure / humidity
+                                                stmt.setInt(3, hum);      // senin oluşturduğun mesaj
+                                                int rows = stmt.executeUpdate();
+                                                if (rows > 0) {
+                                                    logger.info("Humidity alert for sensor '{}' successfully written to DB.", Id);
+                                                }
                                             }
                                         } catch (Exception e) {
                                             logger.error("An error has occured!", e);
@@ -269,10 +309,17 @@ public class FlinkDataStream {
                         }
                     }
 
+                    @Override
+                    public void close() throws Exception {
+                        if (conn != null && !conn.isClosed()) {
+                            conn.close();
+                            logger.info("PostgreSQL connection closed.");
+                        }
+                    }
                 });
 
-                processedStream.addSink(new MqttSink(broker, sinkTopic, sinkClientId)).setParallelism(1);
-                logger.info("Flink job is running. Listening on '{}' and publishing to '{}'", sourceTopic, sinkTopic);
-                env.execute();
-        }
+        processedStream.addSink(new MqttSink(broker, sinkTopic, sinkClientId)).setParallelism(1);
+        logger.info("Flink job is running. Listening on '{}' and publishing to '{}'", sourceTopic, sinkTopic);
+        env.execute();
     }
+}
