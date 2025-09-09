@@ -9,6 +9,7 @@ import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
 import org.apache.flink.streaming.api.functions.windowing.ProcessWindowFunction;
 import org.apache.flink.streaming.api.windowing.assigners.TumblingProcessingTimeWindows;
 import org.apache.flink.streaming.api.windowing.time.Time;
@@ -131,7 +132,7 @@ public class FlinkDataStream {
      * <ul>
      *   <li>MQTT source: reads sensor messages</li>
      *   <li>KeyBy sensorId: groups messages by sensor</li>
-     *   <li>Tumbling window (60s): aggregates readings in time windows</li>
+     *   <li>Tumbling window (30s): aggregates readings in time windows</li>
      *   <li>Process function: filters duplicates, converts Celsius to Fahrenheit,
      *       calculates averages</li>
      *   <li>MQTT sink: publishes processed results back to another topic</li>
@@ -145,12 +146,78 @@ public class FlinkDataStream {
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 
         String broker = params.get("mqtt.broker", "tcp://localhost:1883");
-        String sourceTopic = params.get("mqtt.source.topic", "sensor/input/temp");
-        String sinkTopic = params.get("mqtt.sink.topic", "sensor/output/temp");
+        String sourceTopic = params.get("mqtt.source.topic", "sensor/input/data");
+        String sinkTopic = params.get("mqtt.sink.topic", "sensor/output/data");
         String sourceClientId = params.get("mqtt.source.clientId", "flink-client-source");
         String sinkClientId = params.get("mqtt.sink.clientId", "flink-client-sink");
 
         DataStream<String> mqttStream = env.addSource(new MqttSource(broker, sourceTopic, sourceClientId));
+
+        DataStream<String> activityStream = mqttStream
+                .keyBy(FlinkDataStream::extractSensorId)
+                .process(new KeyedProcessFunction<String, String, String>() {
+                    private transient ValueState<LocalDateTime> activeUntil;
+                    private transient Connection actConn;
+
+                    @Override
+                    public void open(Configuration parameters) {
+                        ValueStateDescriptor<LocalDateTime> descriptor =
+                                new ValueStateDescriptor<>("activeUntil", LocalDateTime.class);
+                        activeUntil = getRuntimeContext().getState(descriptor);
+
+                        String activityUrl = "jdbc:postgresql://localhost:5432/sensor_output_db";
+                        String user = "postgres";
+                        String password = "299464960";
+
+                        try {
+                            actConn = DriverManager.getConnection(activityUrl, user, password);
+                            logger.info("PostgreSQL Activity Database connection established successfully!");
+                        } catch (SQLException e) {
+                            logger.error("Failed to connect to PostgreSQL!", e);
+                        }
+                    }
+
+                    @Override
+                    public void processElement(String json, Context ctx, Collector<String> out) throws Exception {
+                        String sensorId = extractSensorId(json);
+                        String insertAct = "INSERT INTO sensor_activity(sensor_id) VALUES (?)";
+
+                        LocalDateTime now = LocalDateTime.now();
+                        LocalDateTime until = activeUntil.value();
+                        if (until == null || now.isAfter(until)) {
+                            LocalDateTime nextMonthStart = now.plusMonths(1)
+                                                                .withDayOfMonth(1)
+                                                                .withHour(0).withMinute(0).withSecond(0).withNano(0);
+                            activeUntil.update(nextMonthStart);
+
+                            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
+                            out.collect("Sensor " + sensorId + " activated at " + now.format(formatter));
+                            try (PreparedStatement stmt = actConn.prepareStatement(insertAct)){
+                                stmt.setString(1, sensorId);
+                                int rows = stmt.executeUpdate();
+                                if (rows > 0) {
+                                    logger.info("Activity state for sensor '{}' successfully written to DB.", sensorId);
+                                }
+                            }catch (Exception e) {
+                                logger.error("An error has occurred during writing DB 'sensor_activity' !", e);
+                            }
+                        } else {
+                            out.collect("Sensor " + sensorId + " already active in this period.");
+                        }
+                    }
+
+                    @Override
+                    public void close() throws Exception {
+                        if (actConn != null && !actConn.isClosed()) {
+                            actConn.close();
+                            logger.info("PostgreSQL Activity Database connection closed.");
+                        }
+                    }
+                });
+
+        activityStream.print();
+
 
         DataStream<String> processedStream = mqttStream
                 .keyBy(FlinkDataStream::extractSensorId)
@@ -158,7 +225,7 @@ public class FlinkDataStream {
                 .process(new ProcessWindowFunction<String, String, String, TimeWindow>() {
                     private transient HttpClient httpClient;
                     private transient ValueState<Double> lastValueState;
-                    private transient Connection conn;
+                    private transient Connection outConn;
 
                     @Override
                     public void open(Configuration parameters) throws SQLException {
@@ -167,13 +234,13 @@ public class FlinkDataStream {
                                 new ValueStateDescriptor<>("lastValue", Double.class);
                         lastValueState = getRuntimeContext().getState(descriptor);
 
-                        String url = "jdbc:postgresql://localhost:5432/sensor_output_db";
+                        String outputUrl = "jdbc:postgresql://localhost:5432/sensor_output_db";
                         String user = "postgres";
                         String password = "299464960";
 
                         try {
-                            conn = DriverManager.getConnection(url, user, password);
-                            logger.info("PostgreSQL connection established successfully!");
+                            outConn = DriverManager.getConnection(outputUrl, user, password);
+                            logger.info("PostgreSQL Output Database connection established successfully!");
                         } catch (SQLException e) {
                             logger.error("Failed to connect to PostgreSQL!", e);
                             throw e;
@@ -205,8 +272,8 @@ public class FlinkDataStream {
                                         Collector<String> out) throws Exception {
                         ObjectMapper objMapper = new ObjectMapper();
 
-                        double temperature, prs, sum = 0, fahTemp = 0, atm = 0;
-                        int hum = 0, count = 0;
+                        double temperature, prs, sum = 0, fahTemp, atm;
+                        int hum, count = 0;
 
                         Double lastValue = lastValueState.value();
 
@@ -231,7 +298,7 @@ public class FlinkDataStream {
                                                 "{\"Sensor Id\": \"%s\", \"Temperature(°F)\": %.1f, \"Humidity\": %%%d, \"Pressure(atm)\": %.2f} (processed)",
                                                 Id, fahTemp, hum, atm));
 
-                                        File txtWarn = new File("C:\\Users\\Ally\\IdeaProjects\\MqttFlinkPipeline\\src\\main\\java\\MqttFlinkProject\\Flink\\TempWarns.txt");
+                                        File txtWarn = new File("src\\main\\java\\MqttFlinkProject\\Flink\\TempWarns.txt");
                                         LocalDateTime now = LocalDateTime.now();
                                         DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
                                         String formattedDateTime = now.format(formatter);
@@ -242,11 +309,11 @@ public class FlinkDataStream {
                                                 String.format("%.2f", atm) + " atm) - " + formattedDateTime + "\n";
                                         String humWarn = "The humidity of the sensor with ID '" + Id + "' is above %70! (%" +
                                                 hum + ") - " + formattedDateTime + "\n";
-                                        String insertSql = "INSERT INTO sensor_alerts(sensor_id, alert_type, value) VALUES (?, ?, ?)";
+                                        String insertOut = "INSERT INTO sensor_alerts(sensor_id, alert_type, value) VALUES (?, ?, ?)";
 
                                         String ntfyUrl = "https://ntfy.sh/sensor_temp_warn";
 
-                                        try (PreparedStatement stmt = conn.prepareStatement(insertSql)){
+                                        try (PreparedStatement stmt = outConn.prepareStatement(insertOut)){
                                             if (temperature > 45) {
                                                 logger.error("The temperature of the sensor with ID '{}' is above 45 °C! ({} °F)", Id, String.format("%.1f", fahTemp));
                                                 tempMessage(ntfyUrl, tempWarn, httpClient);
@@ -263,8 +330,8 @@ public class FlinkDataStream {
                                                 prsMessage(ntfyUrl, prsWarn, httpClient);
                                                 writeToTxt(prsWarn, txtWarn);
                                                 stmt.setString(1, Id);
-                                                stmt.setString(2, "pressure"); // veya pressure / humidity
-                                                stmt.setDouble(3, atm);      // senin oluşturduğun mesaj
+                                                stmt.setString(2, "pressure");
+                                                stmt.setDouble(3, atm);
                                                 int rows = stmt.executeUpdate();
                                                 if (rows > 0) {
                                                     logger.info("Pressure alert for sensor '{}' successfully written to DB.", Id);
@@ -274,15 +341,15 @@ public class FlinkDataStream {
                                                 humMessage(ntfyUrl, humWarn, httpClient);
                                                 writeToTxt(humWarn, txtWarn);
                                                 stmt.setString(1, Id);
-                                                stmt.setString(2, "humidity"); // veya pressure / humidity
-                                                stmt.setInt(3, hum);      // senin oluşturduğun mesaj
+                                                stmt.setString(2, "humidity");
+                                                stmt.setInt(3, hum);
                                                 int rows = stmt.executeUpdate();
                                                 if (rows > 0) {
                                                     logger.info("Humidity alert for sensor '{}' successfully written to DB.", Id);
                                                 }
                                             }
                                         } catch (Exception e) {
-                                            logger.error("An error has occured!", e);
+                                            logger.error("An error has occurred during writing DB 'sensor_alerts' !", e);
                                         }
 
                                     } else {
@@ -311,9 +378,9 @@ public class FlinkDataStream {
 
                     @Override
                     public void close() throws Exception {
-                        if (conn != null && !conn.isClosed()) {
-                            conn.close();
-                            logger.info("PostgreSQL connection closed.");
+                        if (outConn != null && !outConn.isClosed()) {
+                            outConn.close();
+                            logger.info("PostgreSQL Output Database connection closed.");
                         }
                     }
                 });
