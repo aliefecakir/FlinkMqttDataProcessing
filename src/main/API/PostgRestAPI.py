@@ -5,6 +5,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from typing import List, Optional
 from datetime import datetime
+import os
 
 app = FastAPI()
 
@@ -18,10 +19,11 @@ def load_properties(file_path):
                 props[key.strip()] = value.strip()
     return props
 
-params = load_properties(r"C:\Users\Ally\IdeaProjects\MqttFlinkPipeline\src\main\resources\config.properties")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(BASE_DIR, "..", "resources", "config.properties")
+params = load_properties(CONFIG_PATH)
 
 DATABASE_URL = params.get("db.rest.url")
-print(DATABASE_URL)
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
