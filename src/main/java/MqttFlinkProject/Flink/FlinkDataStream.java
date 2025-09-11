@@ -165,7 +165,7 @@ public class FlinkDataStream {
                                 new ValueStateDescriptor<>("activeUntil", LocalDateTime.class);
                         activeUntil = getRuntimeContext().getState(descriptor);
 
-                        String activityUrl = params.get("db.url");
+                        String activityUrl = params.get("db.jdbc.url");
                         String user = params.get("db.user");
                         String password = params.get("db.password");
 
