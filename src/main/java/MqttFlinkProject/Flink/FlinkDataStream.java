@@ -165,9 +165,9 @@ public class FlinkDataStream {
                                 new ValueStateDescriptor<>("activeUntil", LocalDateTime.class);
                         activeUntil = getRuntimeContext().getState(descriptor);
 
-                        String activityUrl = "jdbc:postgresql://localhost:5432/sensor_output_db";
-                        String user = "postgres";
-                        String password = "299464960";
+                        String activityUrl = params.get("db.url");
+                        String user = params.get("db.user");
+                        String password = params.get("db.password");
 
                         try {
                             actConn = DriverManager.getConnection(activityUrl, user, password);
