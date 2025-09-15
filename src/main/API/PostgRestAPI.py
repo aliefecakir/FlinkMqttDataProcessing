@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Depends, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Float
 from sqlalchemy.ext.declarative import declarative_base
@@ -7,7 +8,20 @@ from typing import List, Optional
 from datetime import datetime
 import os
 
-app = FastAPI()
+app = FastAPI() #use venv\Scripts\activate code in API file and uvicorn PostgRestAPI:app --reload --port 8000 for run
+
+origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000"
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 def load_properties(file_path):
     props = {}
@@ -40,6 +54,14 @@ class AlertResponse(BaseModel):
     class Config:
         orm_mode = True
 
+class SensorActivityResponse(BaseModel):
+    id: int
+    sensor_id: str
+    activity_date: datetime
+
+    class Config:
+        orm_mode = True
+
 def get_db():
     db = SessionLocal()
     try:
@@ -54,6 +76,12 @@ class Alert(Base):
     alert_type = Column(String(20), nullable=False)
     value = Column(Float, nullable=False)
     alert_time = Column(DateTime, nullable=True)
+
+class SensorActivity(Base):
+    __tablename__ = "sensor_activity"
+    id = Column(Integer, primary_key=True, index=True)
+    sensor_id = Column(String(50), nullable=False)
+    activity_date = Column(DateTime, nullable=False)
 
 @app.get("/sensor_alerts/", response_model=List[AlertResponse])
 def read_alerts(skip: int = 0, limit: int = 20,sensor_id: Optional[str] = None, db: Session = Depends(get_db)):
@@ -74,3 +102,9 @@ def delete_alert(alert_id: int, db: Session = Depends(get_db)):
     db.delete(alert)
     db.commit()
     return alert
+
+@app.get("/sensor_activity/", response_model=List[SensorActivityResponse])
+def read_activity(db: Session = Depends(get_db)):
+    activities = db.query(SensorActivity).all()
+    return activities
+
