@@ -310,7 +310,7 @@ public class FlinkDataStream {
                                                 hum + ") - " + formattedDateTime + "\n";
                                         String insertOut = "INSERT INTO sensor_alerts(sensor_id, alert_type, value) VALUES (?, ?, ?)";
 
-                                        String ntfyUrl = "https://ntfy.sh/sensor_temp_warn";
+                                        String ntfyUrl = params.get("ntfy.url");
 
                                         try (PreparedStatement stmt = outConn.prepareStatement(insertOut)){
                                             if (temperature > 45) {
