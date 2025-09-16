@@ -234,7 +234,6 @@ uvicorn PostgRestAPI:app --reload --port 8000
 5. Once the server is running, you can access the interactive API documentation:
 
 * Swagger UI: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
-* ReDoc: [http://127.0.0.1:8000/redoc](http://127.0.0.1:8000/redoc)
 
 
 ## Frontend Integration
