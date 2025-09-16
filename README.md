@@ -15,8 +15,9 @@ This backend repository includes the Flink pipeline and REST API, while the fron
 5. [Usage](#usage)
 6. [Data Flow](#data-flow)
 7. [Configuration](#configuration)
-8. [Frontend Integration](#frontend-integration)
-9. [License](#license)
+8. [API](#API)
+9. [Frontend Integration](#frontend-integration)
+10. [License](#license)
 
 ---
 
