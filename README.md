@@ -118,7 +118,7 @@ MqttFlinkPipeline/
 
 ### 1. Sending Data
 
-Use **MQTT Explorer** or the `[JsonDataPublisher](https://github.com/aliefecakir/JsonDataPublisher)` Python script from my repositories to publish sensor data to the input topic.
+Use **MQTT Explorer** or the [JsonDataPublisher](https://github.com/aliefecakir/JsonDataPublisher) Python script from my repositories to publish sensor data to the input topic.
 
 ### 2. Configure Properties
 
