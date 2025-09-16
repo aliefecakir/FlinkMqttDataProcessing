@@ -218,10 +218,9 @@ public class FlinkDataStream {
 
         activityStream.print();
 
-
         DataStream<String> processedStream = mqttStream
                 .keyBy(FlinkDataStream::extractSensorId)
-                .window(TumblingProcessingTimeWindows.of(Time.seconds(1)))
+                .window(TumblingProcessingTimeWindows.of(Time.seconds(30)))
                 .process(new ProcessWindowFunction<String, String, String, TimeWindow>() {
                     private transient HttpClient httpClient;
                     private transient ValueState<Double> lastValueState;

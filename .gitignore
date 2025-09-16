@@ -46,3 +46,4 @@ build/
 flink-client-sink-tcplocalhost1883/
 flink-client-source-tcplocalhost1883/
 /src/main/java/MqttFlinkProject/Flink/TempWarns.txt
+/.idea/
