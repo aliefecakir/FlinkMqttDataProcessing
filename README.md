@@ -177,7 +177,7 @@ All connection parameters, MQTT topics, and credentials are set in `config.prope
 
 ---
 
-## ⚡ API (FastAPI)
+## API (FastAPI)
 
 The backend API is built with **FastAPI** and provides endpoints for managing sensor data.  
 It connects to a PostgreSQL database and exposes REST endpoints for **alerts** and **sensor activity**.
