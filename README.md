@@ -176,6 +176,66 @@ All connection parameters, MQTT topics, and credentials are set in `config.prope
 
 ---
 
+## ⚡ API (FastAPI)
+
+The backend API is built with **FastAPI** and provides endpoints for managing sensor data.  
+It connects to a PostgreSQL database and exposes REST endpoints for **alerts** and **sensor activity**.
+
+---
+
+### 📂 Endpoints
+
+#### 1. Sensor Alerts
+- **GET** `/sensor_alerts/`
+  - Returns a list of alerts.
+  - Query parameters:
+    - `skip` (int, optional) → default `0`
+    - `limit` (int, optional) → default `20`
+    - `sensor_id` (string, optional) → filter by sensor
+- **DELETE** `/sensor_alerts/{alert_id}`
+  - Deletes an alert by its ID.
+
+#### 2. Sensor Activity
+- **GET** `/sensor_activity/`
+  - Returns the activity logs of sensors.
+  - For each sensor, only the **latest activity timestamp** is used in the frontend.
+
+---
+
+### ⚙️ Running the API
+
+1. Create and activate a virtual environment:
+
+```bash
+python -m venv venv
+source venv/bin/activate    # Linux / Mac
+venv\Scripts\activate       # Windows
+````
+
+2. Install the required dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+3. Configure the database URL in `resources/config.properties`:
+
+```
+db.rest.url=postgresql://username:password@localhost:5432/sensor_output_db
+```
+
+4. Start the FastAPI server:
+
+```bash
+uvicorn PostgRestAPI:app --reload --port 8000
+```
+
+5. Once the server is running, you can access the interactive API documentation:
+
+* Swagger UI: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+* ReDoc: [http://127.0.0.1:8000/redoc](http://127.0.0.1:8000/redoc)
+
+
 ## Frontend Integration
 
 This backend is designed to work with a separate frontend repository for visualization. Refer to the [Frontend Repository](https://github.com/aliefecakir/frontend-repo) for setup and usage.
