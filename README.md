@@ -15,7 +15,7 @@ This backend repository includes the Flink pipeline and REST API, while the fron
 5. [Usage](#usage)
 6. [Data Flow](#data-flow)
 7. [Configuration](#configuration)
-8. [API](#API (FastAPI))
+8. [API](#API)
 9. [Frontend Integration](#frontend-integration)
 10. [License](#license)
 
@@ -177,7 +177,7 @@ All connection parameters, MQTT topics, and credentials are set in `config.prope
 
 ---
 
-## API (FastAPI)
+## API
 
 The backend API is built with **FastAPI** and provides endpoints for managing sensor data.  
 It connects to a PostgreSQL database and exposes REST endpoints for **alerts** and **sensor activity**.
